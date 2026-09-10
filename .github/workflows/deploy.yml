@@ -16,6 +16,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 30m
           script: |
             set -e
             cd /opt/order-order
@@ -23,4 +24,4 @@ jobs:
             git checkout production
             git pull origin production
             docker compose --env-file .env -f infra/docker-compose.yml --profile serve up -d --build
-            docker system prune -f
+            docker image prune -f

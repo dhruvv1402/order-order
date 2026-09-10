@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     indiankanoon_token: str | None = None
     indiankanoon_daily_quota: int = 200
 
+    # A hosted embedding endpoint (OpenAI-compatible /v1/embeddings): Bitdeer's BAAI/bge-m3, a
+    # self-hosted Qwen3-Embedding, anything that speaks the protocol. Empty means encode locally
+    # with the static model, which is the measured baseline the API is an upgrade from.
+    embeddings_base_url: str = ""
+    embeddings_api_key: str = ""
+
     # Local models (later build phases).
     embeddings_model: str = "BAAI/bge-m3"
     reranker_model: str = "BAAI/bge-reranker-v2-m3"

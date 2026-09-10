@@ -16,6 +16,7 @@ from orderorder.db.models import CitationAlias, Judgment
 from orderorder.engine.search import (
     MAX_NEAR_QUERIES,
     NEAR_TERMS,
+    ROLE_PRIOR,
     best_line,
     build_index,
     find_authorities,
@@ -310,3 +311,40 @@ def test_running_the_index_twice_changes_nothing(corpus) -> None:
     """Reconciling has to be idempotent, or every run would grow the index by a whole corpus."""
     first = build_index(corpus)
     assert build_index(corpus) == first
+
+
+def test_the_role_prior_moves_a_holding_above_a_matching_narration(corpus) -> None:
+    """Same words, different roles: the paragraph that states the law outranks one that recites it."""
+    rows = search_paragraphs(corpus, CLAIM)
+    assert rows, "the corpus must answer the claim at all"
+
+    # Every paragraph starts unlabelled, so all carry the narration prior; labelling one `ratio`
+    # lifts its relevance by exactly the prior difference and nothing else moves.
+    before = {
+        r["paragraph_id"]: r["relevance"] for r in search_paragraphs(corpus, CLAIM, role_boost=True)
+    }
+    target = rows[0]["paragraph_id"]
+    corpus.execute(
+        sql_text("UPDATE paragraph SET role = 'ratio' WHERE id = :pid"), {"pid": target}
+    )
+    corpus.commit()
+    after = {
+        r["paragraph_id"]: r["relevance"] for r in search_paragraphs(corpus, CLAIM, role_boost=True)
+    }
+
+    # Unlabelled rows carry a zero prior; labelling to ratio adds the holding prior in full.
+    delta = ROLE_PRIOR["ratio"]
+    assert after[target] == pytest.approx(before[target] + delta, abs=1e-6)
+
+
+def test_the_role_filter_returns_only_the_roles_asked_for(corpus) -> None:
+    rows = search_paragraphs(corpus, CLAIM, roles=["ratio"])
+    assert all(r["role"] == "ratio" for r in rows)
+
+    # And asking for a role nothing carries returns nothing rather than everything.
+    assert search_paragraphs(corpus, CLAIM, roles=["disposition"]) == []
+
+
+def test_find_authorities_honours_the_role_filter(corpus) -> None:
+    found = find_authorities(corpus, CLAIM, top=5, roles=["argument_petitioner"])
+    assert found == []

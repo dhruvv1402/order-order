@@ -79,6 +79,48 @@ DENSE_VOTES = 1
 # lift an irrelevant one.
 FUSION_SCALE = 1000.0
 
+# What each rhetorical role is worth, added to relevance after fusion -- when asked for. The
+# paragraph that answers a legal proposition is the one that states the law, and every paragraph
+# now carries the label that says whether it does (ingest mark-roles, the OpenNyAI set). A facts
+# paragraph or counsel's argument matches a proposition's words as well as the holding does --
+# often better, because an advocate states a rule more baldly than a court will -- and this prior
+# is the retrieval-side half of the same correction `court_voice_only` makes on the way out.
+#
+# Measured on the full corpus, and the reason this is a flag and not the default. Lifting holdings
+# helps exactly when the paragraph being looked for is a holding, and the eval measures sentence
+# recall, whose targets are every kind of paragraph:
+#
+#              baseline   +prior (all roles)   +prior (lift only)
+#   verbatim@1    98%         98%                 98%
+#   fragment@1    85%         93%                 91%
+#   paraphrase@1  25%         16%                 19%
+#   paraphrase@5  42%         34%                 38%
+#
+# A fragment query -- a line remembered -- gains six points. A paraphrase -- an idea restated --
+# loses six, because its own paragraph is as often a recital of facts as a statement of law, and
+# boosting every ratio paragraph in the field boosts the competitors too. Which is the right
+# default depends on the question being asked: "state the law" wants the boost, "find this
+# passage" does not. So the boost is opt-in (`find --role-boost`, `role_boost=True`), the
+# `roles` filter is always available, and the table stands here for whoever runs the next
+# measurement. Small values against a top fused relevance of ~16: enough to break near-ties,
+# never to lift an irrelevant paragraph. A corpus with no labels gets zero everywhere.
+HOLDING_ROLES = ("ratio",)
+SUPPORTING_ROLES = ("precedent_relied", "analysis")
+ROLE_PRIOR: dict[str, float] = (
+    {role: 1.0 for role in HOLDING_ROLES} | {role: 0.5 for role in SUPPORTING_ROLES}
+)
+
+
+def _paragraph_roles(session: Session, paragraph_ids: list[str]) -> dict[str, str | None]:
+    """Rhetorical roles for the retrieved paragraphs, in one query."""
+    if not paragraph_ids:
+        return {}
+    statement = sql_text("SELECT id, role FROM paragraph WHERE id IN :ids").bindparams(
+        bindparam("ids", expanding=True)
+    )
+    return dict(session.execute(statement, {"ids": list(paragraph_ids)}).all())
+
+
 # How much a judgment's standing counts beside how well its words match. A larger bench binds a
 # smaller one, so bench strength is worth more than recency; both are worth less than relevance,
 # which is why these are small.
@@ -277,7 +319,13 @@ def _paragraph_rows(session: Session, paragraph_ids: list[str]) -> list[dict]:
 
 
 def search_paragraphs(
-    session: Session, proposition: str, *, limit: int = DEFAULT_CANDIDATES, dense: bool = False
+    session: Session,
+    proposition: str,
+    *,
+    limit: int = DEFAULT_CANDIDATES,
+    dense: bool = False,
+    roles: list[str] | None = None,
+    role_boost: bool = False,
 ) -> list[dict]:
     """Rank paragraphs across the corpus, fusing how many of the words match with how close they sit.
 
@@ -286,6 +334,11 @@ def search_paragraphs(
     from; and, where a vector store has been built, nearest neighbours in meaning, which is the only
     one of the three that can answer a paraphrase. None is reliable alone, they fail in different
     directions, and reciprocal rank fusion needs no calibration between them.
+
+    `roles` restricts the answer to paragraphs labelled with one of the given rhetorical roles, for
+    the times you want the holding and not the history. `role_boost` lifts labelled holdings above
+    narration at near-ties; it is off because the measurement is mode-dependent -- it buys fragment
+    recall and costs paraphrase recall -- and which mode you are in is the caller's to know.
     """
     query = fts_query(proposition)
     if not query:
@@ -338,10 +391,21 @@ def search_paragraphs(
     # than a short one — the ranking within a search is unaffected either way, but the standing bonus
     # added downstream is a fixed size and has to mean the same thing in both.
     fused = reciprocal_rank_fusion(rankings)
+    # Roles are read for every search (the filter needs them, and the row carries the label for
+    # free), but the prior is added only when the caller asked: the measurement says it is a trade,
+    # and which side of the trade matters is the caller's decision.
+    role_by_id = _paragraph_roles(session, [pid for pid, _score in fused[:limit]])
     ranked: list[dict] = []
     for paragraph_id, score in fused[:limit]:
         row = dict(rows[paragraph_id])
-        row["relevance"] = FUSION_SCALE * score / len(rankings)
+        role = role_by_id.get(paragraph_id) or "none"
+        if roles is not None and role not in roles:
+            continue
+        row["role"] = role
+        relevance = FUSION_SCALE * score / len(rankings)
+        if role_boost:
+            relevance += ROLE_PRIOR.get(role, 0.0)
+        row["relevance"] = relevance
         ranked.append(row)
     return ranked
 
@@ -393,6 +457,8 @@ def find_authorities(
     one_per_judgment: bool = True,
     check_treatment: bool = True,
     dense: bool = False,
+    roles: list[str] | None = None,
+    role_boost: bool = False,
 ) -> list[Authority]:
     """Search the corpus for paragraphs that could back a proposition, best first.
 
@@ -401,7 +467,9 @@ def find_authorities(
     an advocate states a rule more baldly than a court will. Offering one as authority would be
     handing a lawyer the very mistake the verifier exists to catch, so those are dropped here.
     """
-    rows = search_paragraphs(session, proposition, limit=candidates, dense=dense)
+    rows = search_paragraphs(
+        session, proposition, limit=candidates, dense=dense, roles=roles, role_boost=role_boost
+    )
     if not rows:
         return []
 

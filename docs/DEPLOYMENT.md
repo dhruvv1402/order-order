@@ -9,6 +9,11 @@
 [ARCHITECTURE.md](ARCHITECTURE.md) §10 describes the topology this is heading for. This document is
 narrower and more useful: what is actually built, what will stop you, and in what order to fix it.
 
+**Deploying to AWS with the real corpus is §4**, which is §3's recipe with AWS nouns and the four
+decisions that are specific to it: the region (ap-south-1, because that is where the open-data bucket
+already is), EC2 rather than a container platform, one EBS volume rather than EFS, and where TLS
+terminates.
+
 ---
 
 ## 1. What is ready and what is not
@@ -312,7 +317,157 @@ single-process design in §2.3 and change together with it.
 
 ---
 
-## 4. Before anyone else uses it
+## 4. On AWS, with the real corpus
+
+One fact decides most of this section. The corpus comes from `indian-supreme-court-judgments`, an
+AWS Open Data bucket in **ap-south-1**, read over anonymous HTTPS with no credentials and no boto3
+(`ingest/corpus.py`). So run in **ap-south-1**: the ten-hour text build then reads from a bucket in
+its own region, which is both fast and free of transfer charge, and Mumbai is where an Indian legal
+corpus and anything an advocate uploads should be sitting anyway.
+
+### 4.1 EC2, not ECS or Fargate
+
+This wants to be a container platform and it is not one, for reasons already in this document rather
+than any AWS-specific ones:
+
+- The corpus is **one SQLite file** and SQLite is one writer (§2.4).
+- **Jobs live in one process** (§2.3), so exactly one worker — which means no horizontal scaling, no
+  target group with two healthy targets, and no autoscaling group above one. Sticky sessions do not
+  rescue this: a job id is held in a dictionary in one process, and a request that lands anywhere else
+  gets a 404.
+- The corpus is **ten hours of work**, so it must outlive a task restart. Fargate's ephemeral storage
+  does not.
+
+**Do not put the corpus on EFS.** SQLite's locking over NFS is the classic way to corrupt a database
+that was working fine, and the read pattern here — an FTS5 index and a memory-mapped matrix — is the
+worst possible fit for a network filesystem. The corpus wants a block device: **one EBS gp3 volume**.
+
+So the shape is one EC2 instance running the compose `serve` profile, with EBS at `/data`. That is
+§3's recipe with AWS nouns.
+
+### 4.2 Two instance sizes, because building and serving are different jobs
+
+The text build runs at about **65 judgments a minute on eight workers**, which is near ten hours for
+38,032, and it is compute-bound — PDF extraction and cleaning, eight worker processes each holding a
+judgment. Serving is one mostly-reading process. Sizing one instance for both means paying for the
+build's cores for the lifetime of the deployment.
+
+So: build on a compute instance, **snapshot the EBS volume**, then serve from a small one and attach
+the snapshot. The snapshot is the backup as well — ten hours is worth not repeating, and it turns a
+rebuild into minutes.
+
+**Volume size.** Measured at ~2.9 KB a paragraph (§2.6), so 707,647 paragraphs is about **2 GB**, plus
+340 MB if you run `orderorder embed`, plus headroom for an index rebuild, which wants room for both
+copies at once. **20 GB gp3** costs little enough to stop thinking about and is large enough that you
+never have to.
+
+**Memory** is the build's constraint rather than the serve's: eight workers, plus a resume list that is
+~118 MB at this corpus size (§2.6). If the instance is tight, `--limit` bounds the query and the run is
+resumable, so batching down is always available.
+
+### 4.3 Ingest on the instance, not on a laptop
+
+Both halves of this matter. The bucket is in-region, so the download is fast and free. And a 2 GB
+SQLite file pushed up from a laptop over a domestic connection is slower than rebuilding it in-region
+from scratch.
+
+Run it under `tmux` or `screen`, or as a systemd unit. Ten hours outlives an SSH session, and although
+the run is resumable, discovering that at hour nine is a bad way to learn it.
+
+```bash
+# On the build instance, with the volume mounted at /srv/orderorder-data and owned by uid 10001.
+export ORDERORDER_DATA_DIR=/srv/orderorder-data
+
+orderorder init-db
+orderorder ingest metadata $(seq 1950 2025)   # about fifteen minutes for all seventy-six years
+orderorder ingest bulk-text                   # about ten hours; resumable, so re-run it after a drop
+orderorder ingest bulk-text --retry           # confirm the stragglers are missing at source
+orderorder ingest aliases
+orderorder ingest repair-trailers
+orderorder index
+orderorder citator
+orderorder stats                              # 38,032 judgments before you believe any of it
+```
+
+`orderorder embed` is optional and dense retrieval is off by default (§11.4 of ARCHITECTURE); skip it
+unless you intend to run with `--dense`.
+
+**Ingestion inside the container is untested** (§3). `docker compose run --rm api ingest ...` should
+work — the entrypoint is `orderorder` and only the command is `serve` — but nobody has done it against
+a real corpus. Running the CLI directly on the build instance avoids finding out the hard way, and is
+what the commands above assume.
+
+### 4.4 Exposure, and where TLS terminates
+
+The container publishes to `127.0.0.1:8000` deliberately (§2.2), and the binding rule means a token is
+required the moment it is anything else. Two shapes work:
+
+| | how | when |
+|---|---|---|
+| **Reverse proxy on the instance** | Caddy or nginx terminating TLS, proxying to `127.0.0.1:8000` | The default. Nothing in the compose file changes, and the published port stays on loopback |
+| **ALB in front** | Publish to the instance's private address instead of loopback, and lock the security group so **only the ALB's security group** can reach the port | When you want ACM certificates, WAF, or access logs |
+
+The ALB route trades the loopback guarantee for AWS-managed TLS, so the security group becomes the
+thing standing between the corpus and the internet. **Never `0.0.0.0/0` on port 8000.** The token is
+still required in both shapes — it is not an alternative to the network control, and neither is an
+alternative to the other.
+
+### 4.5 Secrets
+
+`ORDERORDER_API_TOKEN` and every model key belong in **SSM Parameter Store (SecureString)** or Secrets
+Manager, fetched at container start by an instance role. Not in the AMI, not in the compose file, not
+in an image layer — `docker history` shows a key baked into a layer even after a later layer deletes
+it (§3a, item 1).
+
+With the multi-account fallback chain, each account's key is its own parameter:
+`/orderorder/GOOGLE_API_KEY`, `/orderorder/GOOGLE_API_KEY_2`, and so on, matching the `#VARIABLE`
+names in `LLM_FALLBACKS`.
+
+Give the instance role the minimum: read those parameters, and write its own CloudWatch log group.
+Nothing here needs S3 credentials — the open-data bucket is anonymous.
+
+### 4.6 What the region does and does not buy
+
+ap-south-1 keeps the corpus, the database and anything uploaded inside India, which is what the DPDP
+position in [PRD.md](PRD.md) §15 wants. Uploaded briefs are never stored at all (§3a, item 5), which is
+stronger still.
+
+**It does not decide where the model runs.** A brief's text leaves the region the moment it is sent to
+a hosted provider, and no AWS setting changes that — `LLM_SENSITIVE` is the control, naming the one
+provider allowed to see text that is not demo data. If privilege is the concern, the answer is the
+self-hosted production profile in [ARCHITECTURE.md](ARCHITECTURE.md) §10, not a region.
+
+### 4.7 The order to do it in
+
+1. Launch a compute instance in **ap-south-1**; attach a 20 GB gp3 volume.
+2. `sudo install -d -o 10001 -g 10001 /srv/orderorder-data` — before anything writes there. A
+   root-owned bind mount fails at the *first request* rather than at boot, which reads as an engine bug
+   (§3).
+3. Ingest, per §4.3. Check `orderorder stats`.
+4. **Snapshot the volume.** This is the artefact worth protecting.
+5. `orderorder migrate --stamp` — once, because the corpus was built before migrations were applied to
+   it (§2.5).
+6. Downsize: launch the serving instance, attach a volume from the snapshot.
+7. Put the token and keys in Parameter Store; `docker compose --profile serve up -d`.
+8. `orderorder doctor --probe` — one real call, confirming a filled schema comes back. A route that
+   answers but will not fill a schema degrades every model-dependent check to *not assessed* (§2.1).
+9. `curl -s localhost:8000/api/health`, then a token-bearing `/api/search` against the real corpus.
+10. Reverse proxy and TLS. Only then a DNS record.
+
+### 4.8 Costs, honestly
+
+The shape is: a compute instance for about a day, then a small always-on instance, 20 GB of gp3, one
+snapshot, and whatever the model tier costs — which will dominate all of it. Model spend is the real
+line item and §2.1 is the argument for a paid tier.
+
+The pricing pass in [TECH_STACK.md](TECH_STACK.md) §12.2 is from September 2026 and was aimed at GPU
+boxes for the self-hosted profile. **It does not cover this deployment and should not be read as
+though it does**; verification needs no GPU at all. Price the two instance sizes against current
+ap-south-1 rates before committing to them rather than trusting a figure written here.
+
+---
+
+## 5. Before anyone else uses it
 
 - **Attribution.** Judgment data is CC-BY-4.0 from AWS Open Data. The attribution is in the README and
   belongs anywhere the corpus is served.

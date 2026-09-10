@@ -5,7 +5,7 @@ object it was attached to — `review_reason` on a verdict, `error` on a job —
 for the advocate reading that verdict and useless to whoever is running the box. A provider that has
 started refusing every call produces a page full of honest *not assessed* and no other trace, and
 the difference between "the corpus has nothing to say about this" and "the model has been down since
-Tuesday" is the difference between a result and an outage. `docs/DEPLOYMENT.md` §4 says to watch the
+Tuesday" is the difference between a result and an outage. `docs/DEPLOYMENT.md` §5 says to watch the
 abstention rate for exactly this reason; a log is how you watch it without reading every verdict.
 
 Three rules, and the third is the one that matters here.

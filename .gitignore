@@ -1,8 +1,12 @@
 # Corpus, uploads, model caches, database and object-store volumes.
 # These live under ORDERORDER_DATA_DIR, which is usually outside the repo.
 data/
+order/
+refrence_repo/
+*.rar
 *.parquet
 *.sqlite
+*.sqlite3
 *.db
 
 # Python

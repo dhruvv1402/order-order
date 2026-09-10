@@ -1030,21 +1030,38 @@ def embed_command(
     if api:
         console.print(f"[dim]endpoint: {get_settings().embeddings_base_url or '(not configured)'}[/dim]")
         console.print(f"[dim]model: {get_settings().embeddings_model}[/dim]")
+        # A trial run must not overwrite the store a full run produced; it lands beside it.
+        store = embeddings.default_store()
+        if limit:
+            from orderorder.config import get_settings as _gs
+
+            store = embeddings.VectorStore(_gs().data_dir / "vectors-trial")
+            console.print(f"[yellow]trial run[/yellow]: writing to {store.directory}, not the main store")
         with get_session() as session:
             written = embeddings.build_api(
                 session,
+                store=store,
+                limit=limit,
                 on_progress=lambda done, total: (
                     console.print(f"  [dim]{done:,}/{total:,}[/dim]")
                     if done % 20_000 < 64 or done == total
                     else None
                 ),
             )
-        store = embeddings.default_store()
         if not written:
             console.print("[yellow]nothing to embed[/yellow]; ingest some judgment text first")
             raise typer.Exit(1)
         size = store.vectors_path.stat().st_size / 1e6
-        console.print(f"[green]{written:,} paragraphs embedded[/green] into {store.vectors_path} ({size:.0f} MB)")
+        console.print(f"[green]{written:,} paragraphs embedded[/green] into {store.vectors_path} ({size:.1f} MB)")
+        if limit:
+            console.print(
+                "[dim]to query this trial store:[/dim] "
+                "uv run python -c \"from orderorder.engine import embeddings; "
+                "from orderorder.config import get_settings; "
+                "from pathlib import Path; "
+                "s = embeddings.VectorStore(get_settings().data_dir / 'vectors-trial'); "
+                "print(embeddings.search('your query', store=s, top=3))\""
+            )
         return
     console.print(f"[dim]encoder: {model}[/dim]")
 

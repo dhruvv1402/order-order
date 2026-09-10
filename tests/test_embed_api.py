@@ -122,3 +122,18 @@ def test_build_api_resumes_from_the_watermark(tmp_path, api_settings, stub_trans
     assert fetched == 2  # rows 4 and 5 only -- the watermark held
     assert store.read_index()["model"] == "BAAI/bge-m3"
     assert not (tmp_path / "vectors" / "embed.progress.json").exists()
+
+
+def test_a_trial_limit_embeds_only_the_first_n_rows(tmp_path, api_settings, stub_transport, monkeypatch) -> None:
+    """--limit 3 of a five-row corpus: three rows fetched, an index of three, the store stands alone."""
+    calls = stub_transport()
+    store = embeddings.VectorStore(directory=tmp_path / "vectors-trial")
+    rows = [(f"p{i}", f"body {i}") for i in range(1, 6)]
+    monkeypatch.setattr(embeddings, "paragraphs_to_embed", lambda session: rows)
+
+    written = embeddings.build_api(session=None, store=store, limit=3)
+
+    assert written == 3
+    assert sum(len(c) for c in calls) == 3
+    assert store.read_index()["count"] == 3
+    assert store.read_index()["paragraph_ids"] == ["p1", "p2", "p3"]

@@ -316,14 +316,21 @@ def encode_for_index(texts: list[str], index_model: str) -> np.ndarray:
 
 
 def build_api(
-    session: Session, *, store: VectorStore | None = None, on_progress=None, resume: bool = True
+    session: Session,
+    *,
+    store: VectorStore | None = None,
+    on_progress=None,
+    resume: bool = True,
+    limit: int | None = None,
 ) -> int:
     """Embed the corpus through the configured endpoint, writing into the store as it goes.
 
     Rows land in a preallocated float16 matrix one batch at a time -- the whole matrix is never
     resident, and a run that dies at 400,000 rows resumes from the watermark in the progress file
     instead of paying for those rows again. The model name is written into the index, so a query
-    is encoded by whatever encoded the corpus, whichever endpoint that was.
+    is encoded by whatever encoded the corpus, whichever endpoint that was. `limit` truncates the
+    run to the first N paragraphs -- a trial, which belongs in its own store directory, not over
+    the one a full run produced.
     """
     store = store or default_store()
     settings = get_settings()
@@ -337,6 +344,8 @@ def build_api(
     api_key = settings.embeddings_api_key
 
     rows = paragraphs_to_embed(session)
+    if limit:
+        rows = rows[:limit]
     ids = [pid for pid, _body in rows]
     progress_path = store.directory / "embed.progress.json"
     done_at = 0

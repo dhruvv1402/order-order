@@ -390,7 +390,13 @@ orderorder stats                              # 38,032 judgments before you beli
 ```
 
 `orderorder embed` is optional and dense retrieval is off by default (§11.4 of ARCHITECTURE); skip it
-unless you intend to run with `--dense`.
+unless you intend to run with `--dense`. If you do want it, use `orderorder embed --api` against a
+hosted `/v1/embeddings` endpoint rather than the local encoder — it is about $3 for the corpus, it is
+the stronger model, and it is not what you want the build instance's cores doing for an extra hour.
+
+Rhetorical roles are worth running here even though they cost minutes: `orderorder ingest mark-roles`
+after the text build. Retrieval reads them as a filter, and a corpus without them simply has that
+filter return nothing.
 
 **Ingestion inside the container is untested** (§3). `docker compose run --rm api ingest ...` should
 work — the entrypoint is `orderorder` and only the command is `serve` — but nobody has done it against

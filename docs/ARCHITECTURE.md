@@ -206,13 +206,34 @@ What this does *not* change is voice (§4.6) and weight (§4.7). Those were buil
 and still decide from structure and attributing cues directly, because they need to name the cue they
 relied on.
 
-**Nothing reads the column yet.** `mark-roles` writes `paragraph.role`, the locator carries it onto
-each candidate, and no check, filter or ranking consumes it — not search, not the drafting gate. The
-motivating argument is sound and unimplemented: a search that cannot tell the facts paragraph from the
-holding paragraph answers a legal question with the case history, and `court_voice_only` currently
-does that job with voice attribution instead. So the labels are a built input awaiting a consumer.
-That is worth stating plainly rather than describing the intent as though it were the behaviour —
-running `mark-roles` changes no output today, and skipping it costs nothing.
+**Retrieval reads them, in two ways, and only one is on.** For a day the labels were written and
+nothing consumed them; `engine/search.py` now does.
+
+- A **filter**, always available: `search_paragraphs(roles=[...])`, `orderorder find --role ratio`.
+  Ask for the holding and the case history is not in the answer.
+- A **boost**, opt-in: `--role-boost` adds a small prior to labelled holdings (`ratio` at 1.0,
+  `precedent_relied` and `analysis` at 0.5) against a top fused relevance of about 16 — enough to
+  break a near-tie, never enough to lift an irrelevant paragraph.
+
+The boost is off by default because the measurement says it is a trade rather than a win:
+
+| | baseline | + prior (all roles) | + prior (lift only) |
+|---|---|---|---|
+| verbatim @1 | 98% | 98% | 98% |
+| fragment @1 | 85% | **93%** | 91% |
+| paraphrase @1 | 25% | 16% | 19% |
+| paraphrase @5 | 42% | 34% | 38% |
+
+A remembered fragment gains six points; a restated idea loses six. The reason is worth keeping,
+because it is not obvious: lifting every holding in the field lifts the *competitors* too, and a
+paraphrase's own source paragraph is as often a recital of facts as a statement of law. So which
+default is right depends on the question — "state the law" wants the boost, "find this passage" does
+not — and that is the caller's to know rather than the engine's to assume.
+
+This is the retrieval-side half of the correction `court_voice_only` makes on the way out (§11.4's
+drafting table is why that filter exists at all). Voice and weight (§4.6, §4.7) remain independent of
+roles: they decide from structure and attributing cues, because they have to name the cue they relied
+on.
 
 Each paragraph receives one of: `preamble`, `facts`, `lower_court`, `issues`, `argument_petitioner`, `argument_respondent`, `analysis`, `statute`, `precedent_relied`, `precedent_not_relied`, `ratio`, `disposition`, `none`. This is the OpenNyAI label set, chosen because `ratio`, `precedent_relied` and `precedent_not_relied` map directly onto the weight and voice checks.
 
@@ -1082,10 +1103,23 @@ easier to pin and an idea harder.
 What is still ruled out is spending a night on a bigger *CPU* model. Asked to pick the right paragraph
 out of a field of 400, the static encoder gets it first 24 times in 40; a small sentence transformer,
 which would take 8.3 hours over this corpus against 4 minutes, gets it 23. Neither discriminates
-finely enough for a field of hundreds of thousands. What it leaves open is the plan this document
-always had: a strong encoder — BGE-M3 — embedded on a borrowed GPU. The store records which model
-wrote it and the encoder is a flag, so that experiment is `orderorder embed --model ...` and a re-run
-of the table above.
+finely enough for a field of hundreds of thousands.
+
+**The strong encoder is no longer waiting on a GPU.** `orderorder embed --api` encodes through any
+OpenAI-compatible `/v1/embeddings` endpoint — a hosted BGE-M3, a self-hosted Qwen3-Embedding, the TEI
+box the production profile calls for — configured by `EMBEDDINGS_BASE_URL`, `EMBEDDINGS_API_KEY` and
+`EMBEDDINGS_MODEL`. The corpus measured 1.05 billion characters, roughly 263-300M tokens, which is
+about **$3** at bge-m3 prices. So the experiment this document has deferred since it was written is an
+afternoon and the price of a coffee, not a borrowed GPU session, and `--limit` runs a trial without
+touching the main store.
+
+The index records which model wrote it and queries are encoded by that same model, so a corpus
+embedded through the endpoint is never queried by the local one — a mismatch would rank silently
+wrong. Re-embedding after a change of model is a rebuild rather than a top-up.
+
+**The table above is the number to beat.** Until someone runs it, everything this section says about
+dense retrieval is a statement about a *static 8M* model and should not be read as a statement about
+dense retrieval.
 
 **Drafting**, 74 propositions drawn from the same forty judgments, `orderorder eval gate`. The other two directions ask whether a detector is right. This one asks a different question, because the gate's voice check and the labelling of the items are the same code, and a detector cannot grade itself. What it asks is about the **traffic**: how much of what a word search puts within a drafting tool's reach is something nobody may cite.
 
@@ -1313,7 +1347,7 @@ Still open:
 
 | Question | Options | Decide by |
 |---|---|---|
-| Whether a strong encoder on a GPU closes the paraphrase gap at corpus scale | BGE-M3 on a borrowed session; `orderorder embed --model ...` and a re-run of §11.4 | The next GPU session |
+| Whether a strong encoder closes the paraphrase gap at corpus scale | **No longer gated on hardware.** `orderorder embed --api` through a hosted `/v1/embeddings` endpoint; the corpus is ~263-300M tokens, about $3 at bge-m3 prices. `--limit` trials it without touching the main store | It is an afternoon; the only reason it is still open is that nobody has spent one |
 | Whether a contrary lead can become a finding | The second reading is written and off by default; it needs a number measured on something other than a laptop, and a labelled set that says whether a passage *denies* a proposition or merely confines the rule to other facts | Phase 1 |
 | Cross-version alignment algorithm: sentence-level fuzzy alignment vs LLM-assisted | Start with fuzzy alignment; add LLM for low-confidence spans. Not built — one text version per judgment so far, so nothing to align | Phase 1 |
 | Whether headnotes from any open source can be used as retrieval hints without being treated as text | Not in MVP. They are stored separately and never resolve a pinpoint | Phase 2 |

@@ -54,6 +54,7 @@ uv run orderorder ingest mark-roles                  # label every paragraph's r
 uv run orderorder index                              # full-text index over every paragraph
 uv run orderorder citator                            # who cited whom, and what they did with it
 uv run orderorder embed                              # vectors for every paragraph (see the numbers first)
+uv run orderorder embed --api                        # ... or through a hosted endpoint: BGE-M3, ~$3
 uv run orderorder chroma-import                      # optional: the same vectors into a local Chroma db
 uv run orderorder chroma-search "notice under Section 106"   # ... and query it directly
 uv run orderorder find "a misrepresentation vitiates consent only where it induced the contract"
@@ -465,9 +466,11 @@ characters of publisher's text came out of judgments already stored.
 
 ### Not built yet
 
-A strong encoder on a GPU. The hybrid retrieval seam is built and measured; what is missing is a
-model good enough to use it, and BGE-M3 on a borrowed GPU session is the experiment the numbers point
-at. The contrary search is a *lead* generator and not yet a finding: `orderorder contrary` establishes
+A strong encoder, *run*. The seam is built, the measurement is waiting, and it is no longer gated on
+hardware: `orderorder embed --api` encodes through any OpenAI-compatible `/v1/embeddings` endpoint, and
+the corpus is about 263-300M tokens — roughly **$3** at BGE-M3 prices. Everything this README says
+about dense retrieval is therefore a statement about a *static 8M* model, and should not be read as a
+statement about dense retrieval. The contrary search is a *lead* generator and not yet a finding: `orderorder contrary` establishes
 that a court wrote a sentence on the subject with the opposite polarity, and only a reading can say
 whether that sentence denies the proposition or merely confines the rule to other facts. The second
 reading is written and is off by default until the number beside it is measured on something other

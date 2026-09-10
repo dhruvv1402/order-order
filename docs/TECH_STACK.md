@@ -297,6 +297,13 @@ index on `citation_alias.normalized`.
 20-40 does not help when the right paragraph is not in the top 400, which is what the paraphrase row
 measures; the encoder is the piece to fix first.
 
+**And the encoder can now be a good one.** `orderorder embed --api` encodes through any
+OpenAI-compatible `/v1/embeddings` endpoint — `EMBEDDINGS_BASE_URL`, `EMBEDDINGS_API_KEY`,
+`EMBEDDINGS_MODEL`. The 0.2 plan was BGE-M3 on a borrowed Kaggle GPU; a hosted endpoint is the same
+model without the session, and the corpus is ~263-300M tokens, about **$3**. The static encoder stays
+the zero-cost default and the measured baseline. This is also the seam the production profile's TEI box
+plugs into, so the hosted endpoint is a stepping stone to self-hosting rather than a detour from it.
+
 ### 8.1a Chroma, and why it is an extra rather than a dependency
 
 `engine/chroma_store.py`, with `orderorder chroma-import` and `orderorder chroma-search`. Ranking
@@ -510,7 +517,7 @@ which is on the built path today.
 | LLM, fallback | Cerebras, gpt-oss-120b | 5-15 RPM, 30K TPM, 1M tokens/day | 8K context | Verify training opt-in |
 | LLM, bulk | Mistral Experiment tier | ~1B tokens/month, ~1 rps (unpublished) | RPS | Opt out of training first |
 | LLM, offline | Ollama, `qwen3:4b`, run locally | Unlimited | 247 s per call on CPU, measured | Local |
-| Corpus embeddings | A static encoder on a local CPU: ~4 minutes over 409,499 paragraphs when that was the corpus; 668,272 are embedded today. BGE-M3 on Kaggle 2×T4 remains the untried upgrade | 30 GPU-hours/week if used | Not the bottleneck; §8.1 is | Local model |
+| Corpus embeddings | A static encoder on a local CPU: ~4 minutes over 409,499 paragraphs when that was the corpus; 668,272 are embedded today. BGE-M3 through a hosted `/v1/embeddings` endpoint is now one flag (`embed --api`) and about **$3** for the corpus | free locally; ~$3 hosted | Not the bottleneck; §8.1 is | Local model, or any endpoint |
 | Reranker | Not built | — | — | — |
 | Embedder bake-off | Voyage (200M / 50M tokens), Jina (10M), Cohere trial (1,000 calls/month) | As listed | Tokens | API; public judgment text only |
 | OCR | Not built; PP-OCRv6 and PaddleOCR-VL still the choice when a scanned brief arrives | Unlimited / 30 GPU-hours | — | Local |

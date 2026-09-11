@@ -1,0 +1,6 @@
+73 queries over the corpus
+
+            case @1  case @5 case @10  para @5     line
+paraphrase     37%     53%     60%     42%     92%
+
+seconds per query: 2.81

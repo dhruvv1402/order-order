@@ -52,6 +52,19 @@ services:
       GOOGLE_API_KEY: "${GOOGLE_API_KEY-}"
       GROQ_API_KEY: "${GROQ_API_KEY-}"
       CEREBRAS_API_KEY: "${CEREBRAS_API_KEY-}"
+      # The agent's own model. This list is an allowlist, not a pass-through, so a Bedrock setting
+      # that is not named here never reaches the container however carefully it was put in `.env` --
+      # and the agent then falls back to a provider key above and keeps answering, which is the
+      # failure that looks like success (DEPLOYMENT.md 4.5a).
+      #
+      # Credentials are deliberately absent. On the instance the role is the credential and needs no
+      # variable at all: botocore reaches the metadata service from inside the container, provided the
+      # instance's IMDS hop limit is 2. `AWS_BEARER_TOKEN_BEDROCK` is here for the boxes that have no
+      # role to attach, and belongs in SSM like every other key.
+      AGENT_MODEL: "${AGENT_MODEL-}"
+      BEDROCK_MODEL: "${BEDROCK_MODEL-}"
+      BEDROCK_REGION: "${BEDROCK_REGION-}"
+      AWS_BEARER_TOKEN_BEDROCK: "${AWS_BEARER_TOKEN_BEDROCK-}"
     volumes:
       # The corpus is state and lives outside the image. Read-write because ingestion, the full-text
       # index and the vector store all write here.

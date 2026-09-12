@@ -12,6 +12,7 @@ It is built on open and official data (AWS Open Data judgments under CC-BY-4.0, 
 |---|---|
 | [docs/PRD.md](docs/PRD.md) | The problem, the evidence that it is urgent, users, the twelve ways a citation lies, requirements for both surfaces, metrics, competition, risks, compliance |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | What is ready to deploy, the six things that will stop you (two now closed), a first deployment, the security posture item by item, and the AWS runbook for the real corpus |
+| [docs/AWS_DEPLOYMENT.md](docs/AWS_DEPLOYMENT.md) | The serving profile on AWS: one EC2 instance, an EBS volume for the corpus, SSM for secrets, TLS at the proxy |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design with ten diagrams: ingestion, the verification engine, the drafting engine, retrieval hierarchy, data model, verdict schema, deployment, evaluation, and the agent layer over all of it (§15) |
 | [docs/TECH_STACK.md](docs/TECH_STACK.md) | The zero-cost hackathon stack and the self-hosted production stack, how LangChain, LangGraph and Strands are used, free-tier limits and data terms, licence audit, dev-machine setup, bill of materials |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The 10-day hackathon sprint with demo script and cut list, then the startup phases, team split, decision log |

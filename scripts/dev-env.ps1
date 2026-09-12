@@ -14,6 +14,8 @@ $env:UV_PYTHON_INSTALL_DIR  = Join-Path $data "uv-python"
 $env:UV_PROJECT_ENVIRONMENT = Join-Path $data "venv"
 $env:HF_HOME                = Join-Path $data "hf"
 $env:OLLAMA_MODELS          = Join-Path $data "ollama"
+$env:PYTHONUTF8             = "1"
+$env:PYTHONIOENCODING       = "utf-8"
 # The virtualenv holds one editable install, and `uv sync` writes into it the absolute path of
 # whichever checkout ran it last. A second checkout of this repository -- a git worktree, a clone
 # beside it -- then gets an `orderorder` on the PATH that runs the *first* checkout's code, and it

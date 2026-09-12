@@ -47,6 +47,8 @@ flowchart LR
     subgraph orderorder["OrderOrder (self-hosted)"]
         WEB["Web page<br/>one static document, served by the API"]
         API["API<br/>FastAPI"]
+        AGT["Agent loop<br/>Strands Agents SDK<br/>eight tools, one per check"]
+        AMOD["Agent's model<br/>Bedrock, or the provider chain via LiteLLM"]
         Q["Job runner<br/>in-process now, arq later"]
         ING["Ingestion and KB builder"]
         ENG["Verification engine"]
@@ -69,6 +71,11 @@ flowchart LR
     U2 --> WEB
     WEB --> API
     API --> Q
+    API --> AGT
+    AGT --> AMOD
+    AGT --> ENG
+    AGT --> DRF
+    AGT --> DB
     Q --> ING
     Q --> ENG
     Q --> DRF
@@ -87,7 +94,7 @@ flowchart LR
     ING -.->|"fallback"| EC
 ```
 
-**Diagram 1.** Users reach the web app; the API enqueues work; workers run the three engines against the local knowledge base, the local LLM and the embedding service. External sources are reached only by the ingestion and resolver components, and everything fetched is normalised into the local store.
+**Diagram 1.** Users reach the web app; the API enqueues work; workers run the three engines against the local knowledge base, the local LLM and the embedding service. External sources are reached only by the ingestion and resolver components, and everything fetched is normalised into the local store. The agent loop is a second way in to the same engines and no more than that: it chooses which check to run and has no path to the knowledge base except through them (§15).
 
 | Component | Responsibility | Package |
 |---|---|---|
@@ -1353,3 +1360,142 @@ Still open:
 | Whether headnotes from any open source can be used as retrieval hints without being treated as text | Not in MVP. They are stored separately and never resolve a pinpoint | Phase 2 |
 | Digest granularity for very long judgments (Constitution Bench, 500+ pages): per-opinion digests | Per-opinion digests merged into one | Phase 1 |
 | The FTS5 duplicate | An external-content table removes 38% of the database at the cost of a join and a rebuild of every index | Before the corpus grows past the Supreme Court |
+
+
+## 15. The agent layer
+
+Every command in this repository is one check, and until now the user had to know which one they
+wanted: `treatment` for subsequent history, `locate` for a pinpoint, `find` for the other direction.
+A lawyer does not arrive with that decomposition. They arrive with "the other side cited this for that
+proposition — is any of it true?", which is four checks and an ordering.
+
+This is the layer that does the decomposition. It is built with the [Strands Agents
+SDK](https://strandsagents.com/) and lives in `src/orderorder/agent/`: a model, eight tools, and a
+prompt. Strands runs the loop — question in, tool calls out, results back, answer — and the tools are
+the checks that were already here.
+
+```mermaid
+flowchart TB
+    Q["A question in plain words<br/>is this still good law, and what is against it?"]
+
+    subgraph agent["Agent loop — Strands Agents SDK"]
+        LOOP["Choose a tool, read the result,<br/>choose again, then answer"]
+        MOD["Model<br/>Bedrock when a credential resolves,<br/>else the provider chain via LiteLLM"]
+        SP["System prompt<br/>assert nothing a tool did not return"]
+    end
+
+    subgraph tools["Eight tools — agent/tools.py"]
+        T1["corpus_status"]
+        T2["resolve_citation"]
+        T3["check_treatment"]
+        T4["locate_paragraph"]
+        T5["verify_brief"]
+        T6["find_authority"]
+        T7["find_contrary_authority"]
+        T8["bind_proposition"]
+    end
+
+    subgraph engine["The engine, unchanged"]
+        RES["Resolver §4.3"]
+        CIT["Citator §4.9"]
+        LOC["Locator §4.5"]
+        GRAPH["Verification graph §4.13<br/>eight nodes, fixed order"]
+        SEARCH["Retrieval §6"]
+        CONTRA["Contrary search §6.1"]
+        GATE["Drafting gate §5"]
+        DB[("Knowledge base")]
+    end
+
+    Q --> LOOP
+    LOOP <--> MOD
+    SP -.->|"constrains"| LOOP
+    LOOP --> T1 & T2 & T3 & T4 & T5 & T6 & T7 & T8
+    T1 --> DB
+    T2 --> RES
+    T3 --> CIT
+    T4 --> LOC
+    T5 --> GRAPH
+    T6 --> SEARCH
+    T7 --> CONTRA
+    T8 --> GATE
+    RES --> DB
+    CIT --> DB
+    LOC --> DB
+    GRAPH --> DB
+    SEARCH --> DB
+    CONTRA --> DB
+    GATE --> DB
+    LOOP --> A["Answer, with the list of<br/>tools that were actually run"]
+```
+
+**Diagram 10.** The agent chooses the question; the engine answers it. Every arrow out of the loop goes
+through a tool, and every tool goes through a check that existed before the agent did. There is no edge
+from the loop to the knowledge base.
+
+| Tool | Wraps | Answers |
+|---|---|---|
+| `corpus_status` | row counts, `search.index_exists` | what is held, so "not in this corpus" can be told from "no such authority" |
+| `resolve_citation` | `resolver.resolve` (§4.3) | does this case exist, and which judgment does the citation name |
+| `check_treatment` | `citator.treatment_of` (§4.9) | is it still good law, and what did later benches do with it |
+| `locate_paragraph` | `locator.locate` (§4.5) | which paragraph carries the claim, and does the cited one |
+| `verify_brief` | `graph.verify_text` (§4.13) | every citation in a passage, all eight stages, findings by mode number |
+| `find_authority` | `search.find_authorities` (§6) | which judgment backs a proposition, and which line |
+| `find_contrary_authority` | `contrary.find_contrary` (§6.1) | which judgment says the opposite |
+| `bind_proposition` | `authority.bind_proposition` (§5) | may this sentence be written, and behind which authority |
+
+### 15.1 What keeps it honest
+
+§4.13 says the verification graph is "deliberately not an agent", and that sentence is still true of
+the graph. The agent does not relax it; it sits above it. The model chooses *which question to ask* and
+never what the answer is, so the path a citation takes through the engine is the same fixed,
+inspectable path it always took, and the agent cannot reorder a node, skip one, or overrule a verdict.
+
+That leaves one real risk, and it is the whole risk: a language model in front of a citation checker
+already believes it knows Indian case law. The belief is fluent, it is confident, and it is the exact
+failure this project exists to catch in other people's briefs. Three things stand against it.
+
+**The prompt forbids it, specifically.** Not "be careful" but: you have no knowledge of Indian case
+law; never write a citation a tool did not return, not as an illustration, not hedged; if the tools
+cannot answer, say so and stop. The prohibitions are asserted by a test, because an edit that softened
+one would otherwise leave every test passing.
+
+**The distinctions the engine is careful about survive the trip.** `support: "not assessed"` means a
+check could not be run, not that the citation passed. A treatment of `good_law` with `unchecked: true`
+means nothing in the corpus has ever cited this judgment — good law by default rather than by evidence.
+A contrary lead with `confirmed: null` means nobody read that passage against the proposition, which is
+not the same as having read it and found nothing. Each of those reaches the model as its own field with
+the engine's own wording beside it, and the prompt says what to do with each. Collapsing them is the
+one way to make honest machinery lie.
+
+**The tool trail comes back with the answer.** `orderorder agent` prints each check as it runs,
+`/api/agent` returns `tools_used`, and both are the audit: an answer about subsequent history that
+never called `check_treatment` came out of the model's memory, and that is visible without reading a
+log.
+
+### 15.2 Which model answers
+
+Bedrock, when an AWS credential resolves — the corpus already comes off AWS Open Data and §10 deploys
+there, so one credential covers the data and the model. The whole botocore chain is consulted rather
+than one variable, so a task role works and nothing need be configured for it.
+
+Without one it falls back to the first available provider from `LLM_PRIMARY` / `LLM_FALLBACKS` through
+LiteLLM, for the same reason §4.12 has abstention rules at all: a free-tier key runs out mid-run, and a
+demo recorded against an expired AWS key is that failure with worse timing. The fallback is never
+silent. `ModelChoice.reason` travels with every answer, `/api/health` reports it, and `orderorder agent
+--which` prints it — because an answer from Bedrock and an answer from a local 4B model are not the
+same answer, and a deployment that cannot tell them apart has a silent regression waiting.
+
+### 15.3 Not built
+
+**No memory between questions.** A fresh agent per request, so that two callers cannot land in one
+conversation; the cost is that a follow-up has to restate what it refers to. Strands has a session
+manager, and this is where it goes.
+
+**`verify_brief` blocks for minutes.** It is the whole engine on a whole brief. The CLI streams the
+tool names so the wait is legible, and `/api/agent` runs on FastAPI's thread pool so it cannot stall
+the process, but the agent route has no job-and-SSE split of its own the way `/api/verify` does (§10).
+A question that triggers it waits.
+
+**Not deployed to AgentCore.** The agent runs wherever the API runs. Bedrock AgentCore would give it a
+managed runtime, and it is the obvious next step rather than a rewrite: the model provider is already
+Bedrock and the tools are already plain functions.

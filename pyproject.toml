@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Citation-integrity engine for Indian case law: does the case exist, which paragraph, and does it support the proposition to the extent claimed."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = [
     "alembic>=1.19.1",
     "fastapi>=0.141.1",
@@ -33,6 +34,7 @@ dependencies = [
     "rich>=15.0.0",
     "sentence-transformers>=3.0",
     "sqlalchemy>=2.0.52",
+    "strands-agents[litellm]>=1.55.1",
     "tenacity>=9.1.4",
     "typer>=0.27.2",
     "uvicorn[standard]>=0.52.4",

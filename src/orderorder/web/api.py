@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from orderorder import __version__, logs
+from orderorder.agent import NoModelConfigured, build_assistant
 from orderorder.db.models import Judgment, JudgmentTextVersion
 from orderorder.db.session import get_session
 from orderorder.drafting.assemble import assemble
@@ -122,6 +123,11 @@ MAX_PLAN_CHARS = 60_000
 # How long a brief may be. A memorial is tens of kilobytes; anything past this is a book, and checking
 # it would tie the single worker up for an hour with no way to say so.
 MAX_BRIEF_CHARS = 400_000
+# A question may carry a passage for the agent to check, so this is not a tweet-sized limit; but it is
+# far short of MAX_BRIEF_CHARS, because a question goes into a model's context whole and a 400,000
+# character one would be refused by the provider after the request had been accepted here. A brief that
+# long belongs in /api/verify, which streams it a citation at a time.
+MAX_QUESTION_CHARS = 60_000
 # And how large a file. A memorial is under a megabyte; a bundle of annexures is not a brief.
 MAX_UPLOAD_BYTES = 25_000_000
 # How much is read at a time while enforcing that limit.
@@ -173,6 +179,10 @@ class DraftRequest(BaseModel):
         default=True,
         description="Run the checks that need a language model. Without one nothing can be bound.",
     )
+
+
+class AgentRequest(BaseModel):
+    question: str = Field(description="A question in plain words, with any passage it refers to.")
 
 
 class VerifyRequest(BaseModel):
@@ -257,6 +267,7 @@ def create_app(
             "corpus_ready": judgments is not None,
             "judgments_with_text": held,
             "model_configured": build_structured(ScopeAssessment) is not None,
+            "agent": _agent_status(),
         }
 
     @app.post("/api/verify")
@@ -538,6 +549,52 @@ def create_app(
                 ],
             }
 
+    @app.post("/api/agent")
+    def ask_agent(request: AgentRequest) -> dict:
+        """A question in plain words. The agent picks which checks to run and reports what they said.
+
+        Deliberately not `async def`. Every tool under `orderorder.agent.tools` does blocking database
+        work and one of them runs the whole verification graph; awaiting that on the event loop would
+        stall every other request this process is serving, including the health check a load balancer
+        is using to decide whether it is still alive. A plain `def` goes to FastAPI's thread pool,
+        where blocking is what the thread is for.
+
+        A fresh agent per request, so that two people's questions cannot land in one conversation. The
+        cost is that it remembers nothing between questions and a follow-up has to restate what it
+        refers to. Continuity is a session manager's job; Strands has one, and docs/ROADMAP.md is
+        where it belongs rather than here.
+
+        `tools_used` comes back with every answer because it is the audit trail. An answer about
+        subsequent history that never called `check_treatment` was answered from the model's memory --
+        which the system prompt forbids -- and a caller should be able to see that without being given
+        the server's logs.
+        """
+        question = request.question.strip()
+        if not question:
+            raise HTTPException(400, "there is no question")
+        if len(question) > MAX_QUESTION_CHARS:
+            raise HTTPException(413, f"a question may be up to {MAX_QUESTION_CHARS:,} characters")
+
+        try:
+            assistant = build_assistant(session_factory=open_session)
+        except NoModelConfigured as exc:
+            # 503 rather than 500: nothing is broken, something is unconfigured, and the distinction is
+            # the difference between reading a stack trace and setting a key.
+            raise HTTPException(503, str(exc)) from exc
+
+        try:
+            answer = assistant.ask(question)
+        except Exception as exc:  # noqa: BLE001 - the caller needs an answer, whatever went wrong
+            log.warning("agent question failed: %s", logs.reason(exc))
+            raise HTTPException(502, f"{type(exc).__name__}: {exc}") from exc
+
+        return {
+            "question": question,
+            "answer": answer,
+            "model": assistant.model.as_json(),
+            "tools_used": assistant.tools_used(),
+        }
+
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC / "index.html")
@@ -629,6 +686,22 @@ def _preferred_citation(session, judgment_id: str) -> str | None:
         .order_by(CitationAlias.reporter, CitationAlias.citation_string)
     ).first()
     return alias.citation_string if alias else None
+
+
+def _agent_status() -> dict:
+    """Which model the agent would use, for the status line. Never raises.
+
+    Reported on the health route because the agent silently falls back when AWS is not configured
+    (see `orderorder.agent.model`), and a deployment that believes it is on Bedrock while every answer
+    comes from a local 4B model looks exactly like one that is. The choice is made here rather than
+    cached because a key can be set without restarting the process.
+    """
+    from orderorder.agent import choose_model
+
+    try:
+        return {"configured": True, **choose_model().as_json()}
+    except Exception as exc:  # noqa: BLE001 - a status line must render whatever is wrong
+        return {"configured": False, "reason": str(exc)}
 
 
 def _run(job: Job, request: VerifyRequest, open_session) -> None:

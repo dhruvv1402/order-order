@@ -32,6 +32,11 @@ Finding one nobody wrote yet:
     orderorder argue propositions.txt    bind each proposition to an authority, or refuse to
     orderorder draft plan.txt --docx x   assemble a written submission from a case plan
 
+Asking in plain words:
+
+    orderorder agent "is (2019) 4 SCC 1 still good law?"   the agent picks the checks itself
+    orderorder agent --which             which model the agent is on, and why
+
 Measuring both:
 
     orderorder eval generate             plant known failures in real judgments
@@ -44,6 +49,7 @@ Measuring both:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from collections.abc import Callable
@@ -1750,6 +1756,70 @@ def resolve_command(text: str = typer.Argument(..., help="A citation, optionally
                 console.print(
                     f"  [dim]{candidate.score:5.1f} {candidate.canonical_key} {candidate.title[:70]}[/dim]"
                 )
+
+
+@app.command("agent")
+def agent_command(
+    question: str = typer.Argument("", help="A question in plain words, with any passage it refers to."),
+    which: bool = typer.Option(False, "--which", help="Print which model the agent would use, and stop."),
+    show_tools: bool = typer.Option(True, "--tools/--no-tools", help="Name each check as it runs."),
+) -> None:
+    """Ask in plain words. The agent chooses which checks to run and reports what they found.
+
+    Every other command here is one check, and you have to know which one you want: `treatment` for
+    subsequent history, `locate` for a pinpoint, `find` for the other direction. This one takes the
+    question as a lawyer would ask it and picks. Built on the Strands Agents SDK; the eight tools it
+    may call are in `orderorder/agent/tools.py`.
+
+    What it cannot do is answer. The tools are the same deterministic checks this CLI has always run,
+    the system prompt forbids the model from asserting anything about a judgment that a tool did not
+    return, and the line of tool names printed as it works is how you can tell: an answer about
+    whether a case is good law that never ran `check_treatment` came out of the model's memory.
+    """
+    from orderorder.agent import NoModelConfigured, build_assistant
+
+    try:
+        assistant = build_assistant()
+    except NoModelConfigured as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if which:
+        console.print(assistant.model.describe())
+        return
+
+    asked = question.strip()
+    if not asked:
+        console.print("[yellow]ask something, or pass --which to see the model[/yellow]")
+        raise typer.Exit(1)
+
+    # Streamed rather than awaited, because the honest tools are slow: `verify_brief` on a real brief
+    # is minutes, and a terminal that has printed nothing for four of them is indistinguishable from
+    # one that has hung. The tool names are the progress bar, and they are also the audit trail.
+    async def run() -> None:
+        started: set[str] = set()
+        async for event in assistant.stream(asked):
+            if "data" in event:
+                console.print(event["data"], end="")
+            elif show_tools and "current_tool_use" in event:
+                use = event["current_tool_use"] or {}
+                key, name = use.get("toolUseId"), use.get("name")
+                if name and key and key not in started:
+                    started.add(key)
+                    console.print(f"[dim]-> {name}[/dim]")
+
+    try:
+        asyncio.run(run())
+    except Exception as exc:  # noqa: BLE001 - one line about what failed beats a traceback here
+        # On its own line: the answer was streaming when this happened, so the cursor is mid-sentence.
+        console.print()
+        console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    console.print()
+    ran = assistant.tools_used()
+    console.print(f"[dim]{assistant.model.describe()}[/dim]")
+    console.print(f"[dim]checks run: {', '.join(ran) if ran else 'none -- nothing was verified'}[/dim]")
 
 
 @app.command()

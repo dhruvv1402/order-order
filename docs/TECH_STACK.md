@@ -41,6 +41,7 @@ is in the last column and, at more length, in the section referenced.
 | Layer | Specified (0.2) | Built | Why they differ |
 |---|---|---|---|
 | Orchestration | **LangChain 1.4 + LangGraph 1.2**: `StateGraph` for the engine, `init_chat_model` + `with_fallbacks` for providers, `with_structured_output` for typed results | As specified. `engine/graph.py` is the compiled graph and every entry point goes through it | — |
+| Agent layer | **Strands Agents SDK 1.55**: one `Agent` over eight `@tool` functions, one per check, in `agent/tools.py`. Bedrock as the model provider, falling back to the provider chain above through LiteLLM when no AWS credential resolves | Built. `orderorder agent` and `POST /api/agent`. The agent chooses which check runs; it has no path to the knowledge base except through a tool, and the verification graph is untouched (ARCHITECTURE §15) | — |
 | LLM | Free API tiers behind ordered fallbacks; Ollama offline | As specified. `engine/providers.py`, chain from `LLM_PRIMARY` and `LLM_FALLBACKS` | The primary model *id* changed: see §5.1 |
 | Frontend | Next.js + TypeScript + Tailwind + shadcn/ui, react-pdf | **One static HTML document** with its own CSS and JS and self-hosted fonts, served by the same FastAPI process. No build step, no Node, no second runtime | The page is a verdict board, a judgment viewer, a search box and a drafting workspace. A toolchain to deploy alongside the engine bought none of that, and every dependency it added was one more thing between a lawyer and the corpus |
 | API | Python 3.12 via `uv`, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic; background tasks with a jobs table | As specified, except jobs: an **in-process registry with a fifteen-minute deadline**, not a table. The `job` table is declared and unused | A job is worthless once the tab closes. [DEPLOYMENT.md](DEPLOYMENT.md) §2.3 — it means **run exactly one worker** |
@@ -62,6 +63,9 @@ is in the last column and, at more length, in the section referenced.
 | Component | Licence | Verdict |
 |---|---|---|
 | LangChain, LangGraph, langgraph-checkpoint-postgres, langgraph-checkpoint-sqlite, langchain-groq, langchain-google-genai, langchain-cerebras, langchain-ollama, langchain-openai | MIT | Use — **installed** |
+| **strands-agents** (the agent layer), boto3/botocore (its Bedrock provider) | Apache-2.0 | Use — **installed** |
+| **LiteLLM** (the agent's non-Bedrock fallback, pulled by `strands-agents[litellm]`) | MIT | Use — **installed** |
+| **OrderOrder itself** | Apache-2.0 ([LICENSE](../LICENSE)) | The repository was unlicensed and `pyproject.toml` said `Proprietary`, which is not a licence and left everyone who could read the public repository with no right to do anything with it. Apache-2.0 rather than MIT for the express patent grant and the contribution terms, both of which matter more to a company built on this than the extra paragraphs cost |
 | FastAPI, Pydantic, SQLAlchemy, Alembic, Typer, rich, rapidfuzz, pypdfium2, python-docx, model2vec, sentence-transformers, uvicorn, httpx, tenacity | MIT / BSD / Apache-2.0 | Use — **installed** |
 | langchain-postgres, langchain-docling, langchain-huggingface, Docling, Next.js | MIT | Cleared, and **not installed**: the pieces they served are built otherwise (§2, §7, §8) |
 | PaddleOCR, PaddleOCR-VL weights, pgvector, TEI, Qwen3.5, Qwen3-Embedding, bge models, gpt-oss, OpenNyAI code and NER | Apache-2.0 (pgvector: PostgreSQL licence) | Use |
@@ -108,7 +112,7 @@ Version 0.1 chose Pydantic AI and plain Python because the engine must be determ
 
 ### 4.3 What is not used
 
-- `create_agent` and any tool-calling agent loop in the verification path. LangGraph is used as a state machine, not as an agent runtime.
+- `create_agent` and any tool-calling agent loop **in the verification path**. LangGraph is used as a state machine, not as an agent runtime, and that has not changed: the agent layer added later (§2, ARCHITECTURE §15) sits *above* the graph and calls it as one tool among eight, so the path a citation takes through the engine is still fixed and still inspectable. Where a tool-calling loop does run, it runs on Strands rather than on LangGraph, because nothing in the engine needed to become an agent for a question to be routed to it.
 - The legacy chains that moved to `langchain-classic` in 1.0 (`LLMChain`, `SequentialChain`, `ConversationalRetrievalChain`, `AgentExecutor`).
 - LangGraph Platform. The open-source checkpointers are all that is needed, and they are free.
 
@@ -486,11 +490,14 @@ lawbot/
                              citator, search, contrary, lexical, embeddings, chroma_store,
                              sentences, memo, report, authority, verdict, prompts, schemas
     drafting/                plan, assemble, render, word, attack
+    agent/                   tools.py (eight @tool wrappers over the checks), assistant.py (the
+                             Strands agent and the prompt that forbids answering from memory),
+                             model.py (Bedrock, or the provider chain through LiteLLM)
     evaluation/              generate, run, retrieval, gate, contrary, gold
     db/                      models.py, session.py
     migrations/              alembic env + versions; inside the package so it ships
     web/                     api.py, auth.py, limits.py, jobs.py, static/ (the page and its fonts)
-  tests/                     47 modules; in-memory database, no network (test_chroma_store skips
+  tests/                     48 modules; in-memory database, no network (test_chroma_store skips
                              unless the chroma extra is installed)
   evals/                     gold.jsonl, holdout.jsonl, paraphrases.jsonl, and the reports
   scripts/                   dev-env.sh, dev-env.ps1, gateway-failure-rate.py

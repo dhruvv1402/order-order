@@ -432,6 +432,83 @@ names in `LLM_FALLBACKS`.
 Give the instance role the minimum: read those parameters, and write its own CloudWatch log group.
 Nothing here needs S3 credentials — the open-data bucket is anonymous.
 
+### 4.5a Bedrock for the agent, which takes no key at all
+
+The agent layer (ARCHITECTURE §15) needs a model of its own, and on an instance you control it needs
+no secret. `agent/model.py` asks botocore's whole credential chain whether a call could be signed
+rather than checking one variable, so the instance role *is* the credential: nothing goes into
+Parameter Store, nothing rotates, nothing can leak from a compose file. Three things to set, and none
+of them is a key.
+
+**1. Two actions on the instance role** — the same role §4.5 gives Parameter Store read and CloudWatch
+write:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+  "Resource": "*"
+}
+```
+
+Both, not one. `/api/agent` invokes; `orderorder agent` streams. A role with only `InvokeModel` gives
+a working HTTP route and a command line that fails, which is a confusing half hour.
+
+`Resource: "*"` is the pragmatic start. Narrowing it is more work than it looks for a cross-region
+inference profile, which needs the profile's own ARN *and* the underlying foundation-model ARNs in
+every region the profile may route to; a policy listing only the profile fails at invoke time.
+
+**2. Model access enabled, in that region, in the Bedrock console.** This is the step that gets
+skipped, because nothing local reveals it: the credential resolves, the model id is spelled correctly,
+and the first call returns `AccessDeniedException`. Confirm what the account actually has before
+trusting `BEDROCK_MODEL`:
+
+```bash
+aws bedrock list-inference-profiles --region ap-south-1
+aws bedrock list-foundation-models --region ap-south-1 \
+  --query 'modelSummaries[?contains(modelId,`anthropic`)].modelId'
+```
+
+**3. `BEDROCK_REGION`.** Set it. `_bedrock_region` prefers `BEDROCK_REGION`, then `AWS_REGION` /
+`AWS_DEFAULT_REGION`, then the `us-west-2` default — and an instance running under a role typically
+exports none of those, because botocore takes the region from the metadata service while this code
+passes `region_name` explicitly. The result is an ap-south-1 box making cross-region calls to
+us-west-2: it works, it costs latency and egress, and it needs model access enabled somewhere other
+than where the instance is. §4.6 is about what the region buys; this is the one setting that decides
+whether the model honours it.
+
+**If the process runs in a container on that instance**, add a fourth. IMDS is then two network hops
+away and AWS defaults the hop limit to one, so the container cannot reach the role at all:
+
+```bash
+aws ec2 modify-instance-metadata-options --instance-id i-xxxx \
+  --http-put-response-hop-limit 2 --http-tokens required
+```
+
+#### Verifying it, and the failure that looks like success
+
+```bash
+uv run orderorder agent --which    # ... via bedrock (an AWS credential resolved)
+uv run orderorder agent "what does your corpus hold?"
+```
+
+The second command is the test. `--which` proves only that a credential **resolved** — permission and
+model access are decided server-side on first invoke, so a role missing an action and a model that was
+never enabled both print a confident `via bedrock` and then throw.
+
+The failure mode to watch for is the quiet one, and it is the price of the fallback being there at all.
+A hop limit left at one, a role without the actions, a region with nothing enabled: each of them means
+no AWS credential resolves or no call succeeds, and the agent carries on answering from the Gemini key
+in `.env`. It is still a working agent, which is the point — but it is a different model than the
+deployment believes it is running. Three places say so and they are the only three: `orderorder agent
+--which`, the `agent` block on `/api/health`, and the `model` field returned with every answer. Put
+the health route's `agent.via` on whatever dashboard you would notice.
+
+**If there is no role to attach** — a laptop, someone else's box, a demo machine — a Bedrock API key
+works and `bedrock_ready()` recognises it. It is then a model key like any other and belongs where
+§4.5 puts them: `AWS_BEARER_TOKEN_BEDROCK` as a SecureString parameter, fetched at start, never in the
+image.
+
 ### 4.6 What the region does and does not buy
 
 ap-south-1 keeps the corpus, the database and anything uploaded inside India, which is what the DPDP

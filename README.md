@@ -12,8 +12,8 @@ It is built on open and official data (AWS Open Data judgments under CC-BY-4.0, 
 |---|---|
 | [docs/PRD.md](docs/PRD.md) | The problem, the evidence that it is urgent, users, the twelve ways a citation lies, requirements for both surfaces, metrics, competition, risks, compliance |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | What is ready to deploy, the six things that will stop you (two now closed), a first deployment, the security posture item by item, and the AWS runbook for the real corpus |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design with nine diagrams: ingestion, the verification engine, the drafting engine, retrieval hierarchy, data model, verdict schema, deployment, evaluation |
-| [docs/TECH_STACK.md](docs/TECH_STACK.md) | The zero-cost hackathon stack and the self-hosted production stack, how LangChain and LangGraph are used, free-tier limits and data terms, licence audit, dev-machine setup, bill of materials |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design with ten diagrams: ingestion, the verification engine, the drafting engine, retrieval hierarchy, data model, verdict schema, deployment, evaluation, and the agent layer over all of it (§15) |
+| [docs/TECH_STACK.md](docs/TECH_STACK.md) | The zero-cost hackathon stack and the self-hosted production stack, how LangChain, LangGraph and Strands are used, free-tier limits and data terms, licence audit, dev-machine setup, bill of materials |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | The 10-day hackathon sprint with demo script and cut list, then the startup phases, team split, decision log |
 
 Suggested reading order: PRD §1-6, then ARCHITECTURE §1-4, then TECH_STACK §4, §5 and §12, then ROADMAP §1.
@@ -62,6 +62,9 @@ uv run orderorder contrary "a notice under Section 106 is mandatory before a sui
 uv run orderorder argue propositions.txt             # bind each proposition to an authority, or refuse
 uv run orderorder draft demo/plan.txt --docx out.docx  # assemble a written submission from a case plan
 uv run orderorder treatment INSC:2019:770            # is this authority still good law?
+
+uv run orderorder agent "is INSC:2019:770 still good law, and what is against it?"
+uv run orderorder agent --which                      # which model the agent is on, and why
 
 uv run orderorder eval generate --seeds 40 --rng-seed 1729   # plant known failures in real judgments
 uv run orderorder eval run --no-model --detail               # score every check that needs no model
@@ -130,6 +133,19 @@ model are still running. The third tab is the drafting workspace: paste a case p
 proposition bind or refuse as it is decided, read the assembled submission and what the other side
 will say about it, and download the .docx. It binds to localhost; the corpus and anything pasted into
 it stay here.
+
+`agent` is the same engine asked in plain words. Every other command here is one check and you have
+to know which one you want — `treatment` for subsequent history, `locate` for a pinpoint, `find` for
+the other direction; this one takes the question as a lawyer would ask it and picks. It is built with
+the [Strands Agents SDK](https://strandsagents.com/): eight tools, one per check, in
+[`src/orderorder/agent/tools.py`](src/orderorder/agent/tools.py).
+
+What it cannot do is answer. The tools are the same deterministic checks, run in the same fixed order,
+and the system prompt forbids the model from asserting anything about a judgment that a tool did not
+return — no citation, no paragraph number, no quotation, not even hedged. The line of tool names it
+prints as it works is how you can tell: an answer about whether a case is good law that never ran
+`check_treatment` came out of the model's memory, which is the exact failure the rest of this
+repository exists to catch. `/api/agent` returns that trail with every answer for the same reason.
 
 `uv run pytest` runs the suite; it uses an in-memory database and never touches the network.
 
@@ -482,8 +498,13 @@ reported as having no text layer. See
 ## Status
 
 Documents complete. Both directions of the engine work end to end on the whole corpus, all twelve
-failure modes are implemented, and both directions are measured on a held-out set. Started
-4 September 2026.
+failure modes are implemented, and both directions are measured on a held-out set. The agent layer
+over the top is built with the Strands Agents SDK and is reachable from the command line, from
+`/api/agent`, and from the page. Started 4 September 2026.
+
+## Licence
+
+[Apache-2.0](LICENSE). The judgment data it reads is separately licensed — see Attribution below.
 
 ## Attribution
 

@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     # providers that speak the OpenAI protocol. Empty means talk to OpenAI.
     llm_base_url: str = ""
 
+    # The agent layer (src/orderorder/agent). Strands reaches Bedrock by default and so does this:
+    # the corpus already comes off AWS Open Data and the deployment in docs/DEPLOYMENT.md runs there,
+    # so one credential covers both the data and the model. When no AWS credential resolves the agent
+    # falls back to whichever provider above is configured, through LiteLLM -- a demo recorded against
+    # a dead key is a demo that does not exist. `agent_model` forces one and skips the choice: either
+    # "bedrock:<model id>" or a provider string in the same spelling as `llm_primary`.
+    agent_model: str = ""
+    bedrock_model: str = "global.anthropic.claude-sonnet-4-6"
+    bedrock_region: str = "us-west-2"
+
     # Indian Kanoon API.
     indiankanoon_token: str | None = None
     indiankanoon_daily_quota: int = 200
